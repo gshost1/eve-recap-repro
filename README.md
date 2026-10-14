@@ -1,35 +1,39 @@
 # eve-recap-repro
 
-This is an [eve](https://eve.dev) agent bootstrapped with [`eve init`](https://eve.dev/docs/reference/cli#eve-init).
+Minimal reproduction: eve's compaction re-caps tool results it already capped, once per
+compaction, so the kept content shrinks while annotations and escape characters pile up.
 
-## Getting started
+Created with `npx eve@0.79.0 init`. Changes from the scaffold, all offline (no API key):
 
-First, run the development server:
+- `agent/agent.ts`: `mockModel` from `eve/evals` and `modelContextWindowTokens: 30_000`, so
+  compaction runs. The mock calls `big_grep` on turn 1 and `pad` on each later turn, then
+  reports what it can still see of the `big_grep` result.
+- `agent/tools/big_grep.ts`: 400 grep lines ending in a `FAIL` line.
+- `agent/tools/pad.ts`: 40,000 chars of new work per turn, so each turn compacts again.
+- `evals/recap.eval.ts`: sends 6 turns and logs the model's report.
 
-```bash
-eve dev
-```
-
-The development TUI opens an interactive session where you can send messages to your agent.
-
-Start by editing `agent/instructions.md` to define the agent's identity, purpose, tone, and response guidelines. Configure its model and runtime behavior in `agent/agent.ts`.
-
-Add capabilities under `agent/`, including tools, connections, channels, skills, subagents, and schedules. eve reloads your changes as you work.
-
-## Learn more
-
-To learn more about eve, explore these resources:
-
-- [eve documentation](https://eve.dev/docs) — learn about eve's features and authoring APIs.
-- [Build an Agent tutorial](https://eve.dev/docs/tutorial/first-agent) — build and deploy an agent step by step.
-- [eve on GitHub](https://github.com/vercel/eve) — view the source and contribute.
-
-## Deploy on Vercel
-
-Deploy your agent to [Vercel](https://vercel.com) from the project root:
+## Run
 
 ```bash
-eve deploy
+npm install
+npx eve eval --verbose
 ```
 
-`eve deploy` links a Vercel project if needed and deploys the agent to production. See the [eve deployment documentation](https://eve.dev/docs/guides/deployment/vercel) for authentication, environment variables, and deployment options.
+## Output (eve 0.79.0)
+
+```
+[recap] turn 1: annotations=0 paths=400 backslashes=0 fail=true
+[recap] turn 2: annotations=0 paths=400 backslashes=0 fail=true
+[recap] turn 3: annotations=0 paths=400 backslashes=0 fail=true
+[recap] turn 4: annotations=1 paths=60 backslashes=180 fail=false
+[recap] turn 5: annotations=2 paths=48 backslashes=393 fail=false
+[recap] turn 6: annotations=3 paths=35 backslashes=663 fail=false
+```
+
+Three `compaction.completed` events, all on the tool-result cap path: the mock answers summary
+requests with `checkpoint`, and that text never appears.
+
+Expected: after the first cap (turn 4), the `big_grep` result stays the same: one annotation,
+60 paths. Cause: `capToolResults` in `packages/eve/src/harness/compaction/engine.ts` has no
+already-capped check, and a capped result's serialized form exceeds `TRANSCRIPT_PAYLOAD_LIMIT`
+again.
